@@ -1,0 +1,161 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Security Groups for Web Server, RDS, and Bastion Host
+
+Parameters:
+  VPCId:
+    Type: String
+    Description: VPC ID for the network
+
+Resources:
+
+  
+  # Security Group for ElastiCache to allow access only from EC2 instances
+  ElastiCacheSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Security Group for ElastiCache allowing access from EC2 instances"
+      VpcId: !Ref VPCId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 6379  # Redis port
+          ToPort: 6379
+          SourceSecurityGroupId: !Ref EC2InstanceSecurityGroup  # Security group of the EC2 instances
+      Tags:
+        - Key: Name
+          Value: ElastiCacheSecurityGroup
+
+  # Security Group for Application Load Balancer (ALB)
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup  # Defines a security group to control access to the ALB
+    Properties:
+      GroupDescription: Allow HTTP and HTTPS traffic to ALB  # This security group allows both HTTP and HTTPS traffic
+      VpcId: !Ref VPCId  # Associate the security group with the VPC created
+      SecurityGroupIngress:  # Inbound traffic rules for ALB
+        - IpProtocol: tcp
+          FromPort: 80  # Allow HTTP traffic on port 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0  # Allow traffic from all IPs (open to the internet)
+        - IpProtocol: tcp
+          FromPort: 443  # Allow HTTPS traffic on port 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0  # Allow traffic from all IPs
+      SecurityGroupEgress:  # Outbound rules for the ALB
+        - IpProtocol: -1  # Allow all protocols for outbound traffic
+          FromPort: '0'
+          ToPort: '65535'
+          CidrIp: 0.0.0.0/0  # Allow traffic to any IP
+      Tags:
+        - Key: Name
+          Value: ALBSecurityGroup
+
+
+  # Security Group for EC2 Instances
+  EC2InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup  # Security group for EC2 instances to control access
+    Properties:
+      GroupDescription: Security group for EC2 instances  # Description of the security group for easy identification
+      VpcId: !Ref VPCId  # Associate the security group with the VPC from the VPC template
+      SecurityGroupIngress:  # Inbound traffic rules for EC2 instances
+        - IpProtocol: tcp
+          FromPort: 80  # Allow HTTP traffic from ALB on port 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref ALBSecurityGroup  # Only allow traffic from the ALB security group
+        - IpProtocol: tcp
+          FromPort: 443  # Allow HTTPS traffic from ALB on port 80
+          ToPort: 443
+          SourceSecurityGroupId: !Ref ALBSecurityGroup  # Only allow traffic from the ALB security group
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          SourceSecurityGroupId: !Ref BastionHostSG  # Allow SSH from Bastion Host
+      SecurityGroupEgress:  # Outbound traffic rules for EC2 instances
+        - IpProtocol: -1  # Allow all outbound traffic
+          FromPort: '0'
+          ToPort: '65535'
+          CidrIp: 0.0.0.0/0  # Allow traffic to any IP
+      Tags:
+        - Key: Name
+          Value: EC2InstanceSecurityGroup
+
+
+  # Security Group for RDS Database
+  RDSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup  # Security group for RDS instances to control access
+    Properties:
+      GroupDescription: Security group for RDS MySQL instance  # Description of the security group
+      VpcId: !Ref VPCId  # Associate with the VPC
+      SecurityGroupIngress:  # Inbound traffic rules for RDS
+        - IpProtocol: tcp
+          FromPort: 3306  # Allow MySQL traffic on port 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !Ref EC2InstanceSecurityGroup  # Allow traffic from EC2 instances only
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !Ref BastionHostSG  # Allow access from Bastion Host
+      SecurityGroupEgress:  # Outbound rules for RDS
+        - IpProtocol: -1  # Allow all outbound traffic
+          FromPort: '0'
+          ToPort: '65535'
+          CidrIp: 0.0.0.0/0  # Allow traffic to any IP
+      Tags:
+        - Key: Name
+          Value: RDSSecurityGroup
+          
+
+  # Bastion Host Security Group (Allows SSH access from any IP)
+  BastionHostSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId: !Ref VPCId
+      GroupDescription: Security group for Bastion Host
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0  # Temporary SSH access from any IP
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0  # HTTP Access from anywhere
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          FromPort: '0'
+          ToPort: '65535'
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: BastionHostSG
+
+Outputs:
+
+  ALBSecurityGroupId:
+    Description: Security Group ID for the ALB
+    Value: !Ref ALBSecurityGroup
+    Export:
+      Name: ALBSecurityGroupId
+
+  ElastiCacheSecurityGroupId:
+    Description: Security Group ID for AWS ElastiCache
+    Value: !Ref ElastiCacheSecurityGroup
+    Export:
+      Name: ElastiCacheSecurityGroupId
+  
+
+  EC2InstanceSecurityGroupId:
+    Description: Security Group ID for the Web Server
+    Value: !Ref EC2InstanceSecurityGroup
+    Export:
+      Name: EC2InstanceSecurityGroupId
+
+  RDSSecurityGroupId:
+    Description: Security Group ID for RDS
+    Value: !Ref RDSSecurityGroup
+    Export:
+      Name: RDSSecurityGroupId
+
+  BastionHostSGId:
+    Description: Security Group ID for Bastion Host
+    Value: !Ref BastionHostSG
+    Export:
+      Name: BastionHostSGId

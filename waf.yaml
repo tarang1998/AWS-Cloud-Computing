@@ -1,0 +1,203 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Minimal template to associate a WAF Web ACL with an ALB.
+
+Parameters:
+  LoadBalancerARN:      
+    Type: String
+    Description: The ARN of the Application Load Balancer
+
+  RateLimitRuleThreshold:
+    Type: Number
+    Default: 500
+    Description: Threshold for the rate limiting rule
+
+  BlacklistIPAddresses:
+    Type: CommaDelimitedList  # Allows a comma-separated list of IP addresses or CIDR ranges
+    Description: "Enter the IP addresses or CIDR ranges to block in the WAF IPSet."
+    Default: "107.115.17.43/32"  # Example default IPs to block
+
+Resources:
+
+
+  IPSetBlacklist:
+    Type: AWS::WAFv2::IPSet
+    Properties:
+      Name: BlacklistIPSet
+      Scope: REGIONAL  # GLOBAL if used with CloudFront
+      IPAddressVersion: IPV4
+      Addresses: !Ref BlacklistIPAddresses 
+    
+      Description: "IP addresses to block"
+
+  WebACL:
+    Type: AWS::WAFv2::WebACL
+    Properties: 
+      DefaultAction: 
+        Allow: {}  # Default action for requests not matching any rule.
+      Name: EcommerceWAFACL
+      Scope: REGIONAL
+      VisibilityConfig: 
+        SampledRequestsEnabled: true
+        CloudWatchMetricsEnabled: true
+        MetricName: EcommerceWAFACLMetric
+      Rules:
+      
+
+        - Name: "AWSManagedRulesCommonRuleSet"
+          Priority: 0
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: "AWS"
+              Name: "AWSManagedRulesCommonRuleSet"
+              ExcludedRules:  # Exclude specific rule by its rule ID
+                - Name: "SizeRestrictions_BODY"
+          OverrideAction:
+            None: {}  # Do not override, allow the managed rule to block requests
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: "CommonRuleSet"
+
+
+        - Name: "AWSManagedRulesKnownBadInputsRuleSet"
+          Priority: 1
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: "AWS"
+              Name: "AWSManagedRulesKnownBadInputsRuleSet"
+          OverrideAction:
+            None: {}  # Do not override, allow the managed rule to block requests
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: "KnownBadInputsRule"
+
+            
+        - Name: "AWSManagedRulesSQLiRuleSet"
+          Priority: 2
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: "AWS"
+              Name: "AWSManagedRulesSQLiRuleSet"
+          OverrideAction:
+            None: {}  # Do not override, allow the managed rule to block requests
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: "SQLInjection-Rule"
+
+
+        - Name: "AWSManagedRulesPHPRuleSet"
+          Priority: 3
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: "AWS"
+              Name: "AWSManagedRulesPHPRuleSet"
+          OverrideAction:
+            None: {}  # Do not override, allow the managed rule to block requests
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: "PHPRuleSet"
+
+
+        - Name: "AWSManagedRulesLinuxRuleSet"
+          Priority: 4
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: "AWS"
+              Name: "AWSManagedRulesLinuxRuleSet"
+          OverrideAction:
+            None: {}  # Do not override, allow the managed rule to block requests
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: "LinuxRuleSet"
+
+
+     
+        - Name: RateLimitRule
+          Action:
+            Block: {}
+          Priority: 5
+          Statement:
+            RateBasedStatement:
+              Limit: !Ref RateLimitRuleThreshold
+              AggregateKeyType: IP
+          VisibilityConfig: 
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: RateLimitRuleMetric
+
+
+
+        - Name: BlockBadIPsRule
+          Action:
+            Block: {}
+          Priority: 6
+          Statement:
+            IPSetReferenceStatement:
+              Arn: !GetAtt IPSetBlacklist.Arn
+          VisibilityConfig: 
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: BlockBadIPsRuleMetric
+            # AndStatement:
+            #   Statements:
+            #     - IPSetReferenceStatement:
+            #         Arn: !GetAtt IPSetBlacklist.Arn
+            #     - NotStatement:
+            #         Statement:
+            #           GeoMatchStatement:
+            #             CountryCodes:
+            #               - US
+            #               - CA
+
+        
+
+  WebACLAssociation:
+    Type: AWS::WAFv2::WebACLAssociation
+    Properties:
+      ResourceArn: !Ref LoadBalancerARN
+      WebACLArn: !GetAtt WebACL.Arn
+
+
+
+  ## Setting up logging manually
+  # WAF Logging Configuration to CloudWatch Logs
+  WAFLoggingConfiguration:
+    Type: AWS::WAFv2::LoggingConfiguration
+    DependsOn: CloudWatchLogGroup  # Ensures that the Log Group is created first
+
+    Properties:
+      ResourceArn: !GetAtt WebACL.Arn
+      LogDestinationConfigs:
+        - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:aws-waf-logs-my-ecommerce-logs
+
+
+  # CloudWatch Log Group for WAF Logs
+  CloudWatchLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: "aws-waf-logs-my-ecommerce-logs"
+      RetentionInDays: 30  # Adjust retention as needed
+
+  # Metric Filter to capture WAF blocked requests
+  WAFBlockedRequestsMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    DependsOn: CloudWatchLogGroup
+    Properties:
+      LogGroupName: "aws-waf-logs-my-ecommerce-logs"
+      FilterName : BlockedRequestLogFilter,
+      FilterPattern: '{$.action = "BLOCK"}'  # Looks for 'BLOCK' in the logs
+      MetricTransformations:
+        - MetricValue: "1"
+          MetricNamespace: "Ecommerce/WAFV2"
+          MetricName: "BlockedRequests"
+         
+
+
+Outputs:
+  WebACLArn:
+    Description: The ARN of the WAF Web ACL
+    Value: !GetAtt WebACL.Arn

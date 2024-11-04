@@ -1,0 +1,221 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: EC2 setup for E-commerce platform in a VPC with Multi-AZ deployment, including ALB, Auto Scaling Group, HTTPS support, RDS integration, and CloudWatch alarms for scaling.
+
+Parameters:
+
+  InstanceType:  # Parameter to allow flexibility in selecting EC2 instance type
+    Type: String
+    Default: t2.micro  # Default to t2.micro for cost savings, but scalable based on the project needs
+    Description: EC2 instance type for web servers
+    AllowedValues:  # List of valid instance types for deployment
+      - t2.micro
+      - t2.small
+      - t2.medium
+    ConstraintDescription: Must be a valid EC2 instance type.  # Error message when invalid type is provided
+
+  AMIId:  # Parameterization of AMI ID for flexibility across environments (e.g., Dev, Prod)
+    Type: String
+    Description: The AMI ID for the web server
+
+  SSLCertificateArn:
+    Description: ARN of the SSL certificate to use for HTTPS
+    Type: String
+    Default : ""
+
+  ECommerceVPC:
+    Type: String
+    Description: VPC ID for the network
+
+  PublicSubnetAZ1Id:
+    Type: String
+    Description: Public Subnet ID for AZ1
+
+  PublicSubnetAZ2Id:
+    Type: String
+    Description: Public Subnet ID for AZ1
+
+  EC2PrivateSubnetAZ1Id:
+    Type: String
+    Description: Private Subnet ID for EC2 web server instances in AZ1
+
+  EC2PrivateSubnetAZ2Id:
+    Type: String
+    Description: Private Subnet ID for EC2 web server instances in AZ2
+
+  ALBSecurityGroupId:
+    Type: String
+    Description: Security Group ID for the Application Load Balancer
+
+  EC2InstanceSecurityGroupId:
+    Type: String
+    Description: Security Group ID for the Web Server EC2 Instance
+
+  SSHAccessKeyName:
+    Description: "The EC2 Key Pair to allow SSH access to the instances"
+    Type: "AWS::EC2::KeyPair::KeyName"
+    ConstraintDescription: "Must be an existing EC2 KeyPair name."
+
+  InstanceIAMRole:
+    Type: String
+    Description: The IAM Role to associate with EC2 instances in the Auto Scaling Group
+
+
+
+Resources:
+
+  EcommerceALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer  # ALB to balance traffic across multiple EC2 instances
+    Properties:
+      Name: EcommerceALB  # Name for easy identification in the AWS console
+      Subnets:  # Use public subnets from VPC template for high availability
+        - !Ref PublicSubnetAZ1Id  # Public subnet in AZ1
+        - !Ref PublicSubnetAZ2Id  # Public subnet in AZ2
+      SecurityGroups:
+        - !Ref ALBSecurityGroupId  # Use the ALB security group
+      Scheme: internet-facing  # Publicly accessible ALB
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds  # Set timeout for idle connections
+          Value: '60'  # Adjust based on traffic patterns
+      
+  # Target Group for ALB to route traffic to EC2 instances
+  EcommerceTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup  # Target group for routing traffic to EC2 instances
+    Properties:
+      Name: EcommerceTargetGroup  # Name for easy identification
+      VpcId: !Ref ECommerceVPC  # Associate with VPC
+      Port: 80  # Route traffic to EC2 instances on port 80 (HTTP)
+      Protocol: HTTP  # Use HTTP for the target group communication
+      TargetType: instance  # Route traffic directly to EC2 instances
+      HealthCheckPath: /  # Health check on the root path
+      HealthCheckProtocol: HTTP  # Use HTTP for health checks
+      HealthCheckIntervalSeconds: 30  # Health checks every 30 seconds
+      HealthyThresholdCount: 3  # Consider instance healthy after 3 successful checks
+      UnhealthyThresholdCount: 3  # Consider instance unhealthy after 3 failed checks
+      # Enable stickiness for session persistence
+      TargetGroupAttributes:
+        - Key: stickiness.enabled
+          Value: 'true'
+        - Key: stickiness.type
+          Value: lb_cookie
+        - Key: stickiness.lb_cookie.duration_seconds
+          Value: '600'
+
+  
+  # HTTP Listener for ALB
+  # Redirect to HTTP 
+  MyHTTPListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener  # Listener to handle HTTP traffic
+    Properties:
+      DefaultActions:
+        - Type: redirect
+          RedirectConfig:
+            Protocol: HTTPS
+            Port: "443"
+            StatusCode: HTTP_301
+      LoadBalancerArn: !Ref EcommerceALB  # Attach to the ALB
+      Port: 80  # Listen for HTTP traffic on port 80
+      Protocol: HTTP  # Use HTTP
+
+
+  # HTTPS Listener for ALB
+  MyHTTPSListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener  # Listener to handle HTTPS traffic
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref EcommerceTargetGroup  # Forward HTTPS traffic to the target group
+      LoadBalancerArn: !Ref EcommerceALB  # Attach to the ALB
+      Port: 443  # Listen for HTTPS traffic on port 443
+      Protocol: HTTPS  # Use HTTPS for secure traffic
+      SslPolicy: ELBSecurityPolicy-TLS-1-2-2017-01 # Strong TLS policy
+      Certificates:  # SSL Certificate from AWS Certificate Manager (ACM) for HTTPS
+        - CertificateArn: !Ref SSLCertificateArn #arn:aws:acm:region:account-id:certificate/certificate-id  # Replace with your actual ACM certificate ARN
+
+
+
+  # Launch Template for EC2 instances
+  EcommerceLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate  # Defines EC2 instance configurations
+    Properties:
+      LaunchTemplateName: EcommerceLaunchTemplate  # Name for easy identification
+      LaunchTemplateData:
+        InstanceType: !Ref InstanceType  # Use the instance type from the parameters
+        IamInstanceProfile:
+          Arn: !Ref InstanceIAMRole
+        ImageId: !Ref AMIId  # Use the AMI ID from the parameters
+        SecurityGroupIds:
+          - !Ref EC2InstanceSecurityGroupId  # Use the EC2 instance security group
+        KeyName: !Ref SSHAccessKeyName  # Replace with your actual key pair for SSH access
+        UserData:  # Bootstrap script to install the application on the EC2 instances
+          Fn::Base64: !Sub |
+            #!/bin/bash
+
+            # Make it executable
+            sudo chmod +x /var/www/html/startupScript.sh
+
+            # Run your bash script
+            /var/www/html/startupScript.sh
+
+  # Auto Scaling Group to manage EC2 instances
+  MyAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup  # Auto Scaling group to manage EC2 instances based on load
+    Properties:
+      VPCZoneIdentifier:
+        - !Ref EC2PrivateSubnetAZ1Id  # Private subnet in AZ1 for high availability
+        - !Ref EC2PrivateSubnetAZ2Id  # Private subnet in AZ2 for high availability
+      LaunchTemplate:
+        LaunchTemplateId: !Ref EcommerceLaunchTemplate  # Use the launch template defined above
+        Version: !GetAtt EcommerceLaunchTemplate.LatestVersionNumber
+      MinSize: 2  # Minimum number of instances to start with
+      MaxSize: 6  # Maximum number of instances for handling up to 300 users
+      DesiredCapacity: 2  # Desired initial number of instances
+      TargetGroupARNs:
+        - !Ref EcommerceTargetGroup  # Register EC2 instances with the target group
+      HealthCheckType: ELB  # Perform health checks using ALB
+      HealthCheckGracePeriod: 300  # Wait 300 seconds before starting health checks
+
+  # Scaling Policy: Scale out when CPU utilization exceeds 50%
+  ScaleUpPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName: !Ref MyAutoScalingGroup  # Reference the Auto Scaling group
+      PolicyType: StepScaling
+      StepAdjustments:
+      - MetricIntervalLowerBound: 0
+        ScalingAdjustment: 1  # Add 1 instance when CPU exceeds 50%
+      AdjustmentType: ChangeInCapacity
+      Cooldown: 300  # Optional cooldown period in seconds
+      EstimatedInstanceWarmup: 300  # Warmup period in seconds
+
+    
+  # Scaling Policy: Scale in when CPU utilization drops below 20%
+  ScaleDownPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName: !Ref MyAutoScalingGroup
+      PolicyType: StepScaling
+      StepAdjustments:
+      - MetricIntervalUpperBound: 0
+        ScalingAdjustment: -1  # Remove 1 instance when CPU drops below 20%
+      AdjustmentType: ChangeInCapacity
+      Cooldown: 300  # Optional cooldown period in seconds
+      EstimatedInstanceWarmup: 300  # Warmup period in seconds
+
+    
+
+Outputs:
+  LoadBalancerDNSName:
+    Description: DNS Name of the Application Load Balancer
+    Value: !GetAtt EcommerceALB.DNSName
+
+  ScaleUpPolicyARN:
+    Description: ARN of the scale up policy
+    Value: !Ref ScaleUpPolicy
+    Export:
+      Name: !Sub "${AWS::StackName}-ScaleUpPolicyARN"
+
+  ScaleDownPolicyARN:
+    Description: ARN of the scale down policy
+    Value: !Ref ScaleDownPolicy
+    Export:
+      Name: !Sub "${AWS::StackName}-ScaleDownPolicyARN"

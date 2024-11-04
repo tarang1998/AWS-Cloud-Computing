@@ -1,0 +1,427 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudFormation Template for VPC, Subnets, IGW, and NAT Gateway.
+
+
+
+Parameters:
+  VpcCIDR:
+    Description: Please enter the IP range (CIDR notation) for this VPC
+    Type: String
+    Default: 10.0.0.0/22
+
+  PublicSubnet1CIDR:
+    Description: Please enter the IP range (CIDR notation) for the public subnet in the first Availability Zone
+    Type: String
+    Default: 10.0.0.0/26
+
+  PublicSubnet2CIDR:
+    Description: Please enter the IP range (CIDR notation) for the public subnet in the second Availability Zone
+    Type: String
+    Default: 10.0.0.128/26
+
+  PrivateSubnet1CIDR:
+    Description: Please enter the IP range (CIDR notation) for the private subnet for EC2 instance in the first Availability Zone
+    Type: String
+    Default: 10.0.0.64/26
+
+  PrivateSubnet2CIDR:
+    Description: Please enter the IP range (CIDR notation) for the private subnet for EC2 instance in the second Availability Zone
+    Type: String
+    Default: 10.0.0.192/26
+
+  RDSPrivateSubnet1CIDR:
+    Description: Please enter the IP range (CIDR notation) for the private subnet for RDS in the first Availability Zone
+    Type: String
+    Default: 10.0.2.0/26
+
+  RDSPrivateSubnet2CIDR:
+    Description: Please enter the IP range (CIDR notation) for the private subnet for RDS in the second Availability Zone
+    Type: String
+    Default: 10.0.2.64/26
+
+ 
+
+
+
+
+Mappings:
+  RegionMap:
+    us-east-1:
+      AZs:
+        - us-east-1a
+        - us-east-1b
+        - us-east-1c
+  
+
+
+
+
+Resources:
+  ECommerceVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCIDR
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: ECommerceVPC
+
+  ECommerceIGW:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: ECommerceIGW
+
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref ECommerceVPC
+      InternetGatewayId: !Ref ECommerceIGW
+
+
+
+
+  # Public Subnets for ALB and Bastion Host
+  PublicSubnetAZ1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref ECommerceVPC
+      CidrBlock: !Ref PublicSubnet1CIDR
+      AvailabilityZone: !Select
+        - 0
+        - !FindInMap
+          - RegionMap
+          - !Ref AWS::Region
+          - AZs
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: PublicSubnetAZ1
+
+  PublicSubnetAZ2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref ECommerceVPC
+      CidrBlock: !Ref PublicSubnet2CIDR
+      AvailabilityZone: !Select
+        - 1
+        - !FindInMap
+          - RegionMap
+          - !Ref AWS::Region
+          - AZs
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: PublicSubnetAZ2
+
+
+
+
+
+  # Private Subnets for EC2 Instances
+  PrivateSubnetAZ1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref ECommerceVPC
+      CidrBlock: !Ref PrivateSubnet1CIDR
+      AvailabilityZone: !Select
+        - 0
+        - !FindInMap
+          - RegionMap
+          - !Ref AWS::Region
+          - AZs
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: PrivateSubnetAZ1
+
+  PrivateSubnetAZ2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref ECommerceVPC
+      CidrBlock: !Ref PrivateSubnet2CIDR
+      AvailabilityZone: !Select
+        - 1
+        - !FindInMap
+          - RegionMap
+          - !Ref AWS::Region
+          - AZs
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: PrivateSubnetAZ2
+
+
+
+
+  # Private Subnets for RDS
+  RDSPrivateSubnetAZ1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref ECommerceVPC
+      CidrBlock: !Ref RDSPrivateSubnet1CIDR
+      AvailabilityZone: !Select
+        - 0
+        - !FindInMap
+          - RegionMap
+          - !Ref AWS::Region
+          - AZs
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: RDSPrivateSubnetAZ1
+
+  RDSPrivateSubnetAZ2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref ECommerceVPC
+      CidrBlock: !Ref RDSPrivateSubnet2CIDR
+      AvailabilityZone: !Select
+        - 1
+        - !FindInMap
+          - RegionMap
+          - !Ref AWS::Region
+          - AZs
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: RDSPrivateSubnetAZ2
+
+  
+  # NAT
+  # Allocate an Elastic IP for the first NAT Gateway
+  NatEIP1:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  # Create the first NAT Gateway
+  ECommerceNATGateway1:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      SubnetId: !Ref PublicSubnetAZ1
+      AllocationId: !GetAtt NatEIP1.AllocationId
+      Tags:
+        - Key: Name
+          Value: ECommerceNATGateway1
+
+  # Allocate an Elastic IP for the second NAT Gateway
+  NatEIP2:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  # Create the second NAT Gateway
+  ECommerceNATGateway2:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      SubnetId: !Ref PublicSubnetAZ2
+      AllocationId: !GetAtt NatEIP2.AllocationId
+      Tags:
+        - Key: Name
+          Value: ECommerceNATGateway2
+
+
+
+
+  # Public Route Tables and Routes 
+  # Create the Public Route Table 
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref ECommerceVPC
+      Tags:
+        - Key: Name
+          Value: PublicRouteTable
+
+  # Add a route to the Internet Gateway in the public route table
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref ECommerceIGW
+
+  # Associate the first public subnet with the public route table
+  PublicSubnetRouteTableAssociation1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetAZ1
+      RouteTableId: !Ref PublicRouteTable
+
+  # Associate the second public subnet with the public route table
+  PublicSubnetRouteTableAssociation2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetAZ2
+      RouteTableId: !Ref PublicRouteTable
+
+
+
+
+
+  #Private Route Table for first EC2 private subnet 
+  EC2PrivateRouteTable1:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref ECommerceVPC
+      Tags:
+        - Key: Name
+          Value: EC2PrivateRouteTable1
+
+  PrivateSubnet1RouteTable1Association:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetAZ1
+      RouteTableId: !Ref EC2PrivateRouteTable1
+
+  NATRoute1:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref EC2PrivateRouteTable1
+      DestinationCidrBlock: "0.0.0.0/0"
+      NatGatewayId: !Ref ECommerceNATGateway1
+
+
+
+
+  #Private Route Table for second EC2 private subnet
+  EC2PrivateRouteTable2:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref ECommerceVPC
+      Tags:
+        - Key: Name
+          Value: EC2PrivateRouteTable2
+
+  PrivateSubnet2RouteTable2Association:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetAZ2
+      RouteTableId: !Ref EC2PrivateRouteTable2
+
+  NATRoute2:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref EC2PrivateRouteTable2
+      DestinationCidrBlock: "0.0.0.0/0"
+      NatGatewayId: !Ref ECommerceNATGateway2
+
+
+
+
+  # Private Route Table for RDS private subnets 
+  RDSPrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref ECommerceVPC
+      Tags:
+        - Key: Name
+          Value: RDSPrivateRouteTable
+
+  RDSPrivateSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref RDSPrivateSubnetAZ1
+      RouteTableId: !Ref RDSPrivateRouteTable
+
+  RDSPrivateSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref RDSPrivateSubnetAZ2
+      RouteTableId: !Ref RDSPrivateRouteTable
+  
+  # Log Group for VPC Flow Logs
+  VPCFlowLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/vpc/flowlogs/ECommerceVPC
+      RetentionInDays: 7
+
+  # IAM Role for VPC Flow Logs
+  VPCFlowLogsIAMRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: vpc-flow-logs.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: VPCFlowLogsPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+
+  # VPC Flow Logs
+  VPCFlowLogs:
+    Type: AWS::EC2::FlowLog
+    Properties:
+      ResourceId: !Ref ECommerceVPC
+      ResourceType: VPC
+      TrafficType: ALL
+      LogDestinationType: cloud-watch-logs
+      LogGroupName: !Ref VPCFlowLogGroup
+      DeliverLogsPermissionArn: !GetAtt VPCFlowLogsIAMRole.Arn
+
+
+  
+
+
+Outputs:
+
+  VPCId:
+    Description: VPC ID for the created VPC
+    Value: !Ref ECommerceVPC
+    Export:
+      Name: ECommerceVPCId
+
+  PublicSubnetAZ1Id:
+    Description: Public Subnet ID for AZ1
+    Value: !Ref PublicSubnetAZ1
+    Export:
+      Name: PublicSubnetAZ1Id
+
+  PublicSubnetAZ2Id:
+    Description: Public Subnet ID for AZ2
+    Value: !Ref PublicSubnetAZ2
+    Export:
+      Name: PublicSubnetAZ2Id
+
+  PrivateSubnetAZ1Id:
+    Description: Private Subnet ID for EC2 in AZ1
+    Value: !Ref PrivateSubnetAZ1
+    Export:
+      Name: PrivateSubnetAZ1Id
+
+  PrivateSubnetAZ2Id:
+    Description: Private Subnet ID for EC2 in AZ2
+    Value: !Ref PrivateSubnetAZ2
+    Export:
+      Name: PrivateSubnetAZ2Id
+
+  RDSPrivateSubnetAZ1Id:
+    Description: Private Subnet ID for RDS in AZ1
+    Value: !Ref RDSPrivateSubnetAZ1
+    Export:
+      Name: RDSPrivateSubnetAZ1Id
+
+  RDSPrivateSubnetAZ2Id:
+    Description: Private Subnet ID for RDS in AZ2
+    Value: !Ref RDSPrivateSubnetAZ2
+    Export:
+      Name: RDSPrivateSubnetAZ2Id
+
+
+  

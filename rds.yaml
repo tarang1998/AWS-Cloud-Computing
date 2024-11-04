@@ -1,0 +1,145 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudFormation Template for an RDS MySQL Instance with Multi-AZ and Secrets Manager
+
+Parameters:
+  VPCId:
+    Type: String
+    Description: VPC ID for the network
+
+  RDSSecurityGroupId:
+    Type: String
+    Description: Security Group ID for the RDS instance
+
+  RDSPrivateSubnetAZ1Id:
+    Type: String
+    Description: Private Subnet ID for AZ1
+
+  RDSPrivateSubnetAZ2Id:
+    Type: String
+    Description: Private Subnet ID for AZ2
+
+  RDSSecretArn:
+    Type: String
+    Description: ARN of the secret in AWS Secrets Manager containing the RDS credentials
+
+  DBInstanceClass:
+    Description: "Database instance type"
+    Type: String
+    Default: db.t3.micro
+    AllowedValues: 
+      - db.t3.micro
+      - db.t3.small
+      - db.t3.medium
+      - db.t3.large
+    ConstraintDescription: "Must be a valid RDS instance type."
+
+ 
+
+
+  DBSnapshotIdentifier:
+    Description: "The identifier for the RDS snapshot to restore from"
+    Type: String
+    Default: ""  # Replace with your snapshot identifier
+    ConstraintDescription: "Must be a valid RDS snapshot identifier."
+
+  DBInstanceIdentifier:
+    Description: "The name of the new RDS instance"
+    Type: String
+    Default: "ecommerce-db-instance"
+    ConstraintDescription: "Must be a valid DB instance identifier."
+
+  DBName:
+    Description: "The name of the database"
+    Type: String
+    Default: "ecommerce"
+    
+  DBAllocatedStorage:
+    Description: "The size of the database (GB)"
+    Type: Number
+    Default: 20
+    MinValue: 20
+    MaxValue: 1000
+    ConstraintDescription: "Must be between 20 and 1000 GB."
+
+  KmsKeyId:
+    Description: "The KMS Key ID to use for encryption"
+    Type: String
+    Default: ""
+    ConstraintDescription: "Must be a valid KMS key ID."
+
+  MultiAZ:
+    Description: "Enable Multi-AZ deployment"
+    Type: String
+    Default: true
+    AllowedValues: 
+      - true
+      - false
+
+Conditions:
+  HasSnapshot:
+    Fn::Not:
+      - Fn::Equals: [!Ref DBSnapshotIdentifier, ""]
+
+  HasKmsKey:
+    Fn::Not:
+      - Fn::Equals: [!Ref KmsKeyId, ""]
+
+
+Resources:
+
+ 
+  # RDS Subnet Group
+  RDSSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: "Subnet group for RDS"
+      SubnetIds:
+        - !Ref RDSPrivateSubnetAZ1Id
+        - !Ref RDSPrivateSubnetAZ2Id
+      Tags:
+        - Key: Name
+          Value: RDSSubnetGroup
+
+  # RDS MySQL Instance
+  MyRDSInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBSnapshotIdentifier: !If 
+        - HasSnapshot  # Condition that checks if a snapshot identifier is provided
+        - !Ref DBSnapshotIdentifier  # Use snapshot if provided
+        - !Ref "AWS::NoValue"  # Ignore this property if no snapshot is provided
+      DBInstanceIdentifier: !Ref DBInstanceIdentifier
+      AllocatedStorage: !Ref DBAllocatedStorage
+      DBInstanceClass: !Ref DBInstanceClass
+      Engine: "mysql"
+      EngineVersion: "8.0"
+      MasterUsername: !Sub "{{resolve:secretsmanager:${RDSSecretArn}:SecretString:username}}"
+      MasterUserPassword: !Sub "{{resolve:secretsmanager:${RDSSecretArn}:SecretString:password}}"
+      PubliclyAccessible: false  # Keep the DB instance private
+      MultiAZ: !Ref MultiAZ
+      VPCSecurityGroups:
+        - !Ref RDSSecurityGroupId
+      DBSubnetGroupName: !Ref RDSSubnetGroup
+      StorageEncrypted: !If [HasKmsKey, true, false]  # Enable encryption if KMS key is provided
+      KmsKeyId: !If [HasKmsKey, !Ref KmsKeyId, !Ref "AWS::NoValue"]  # Use KMS key for encryption if provided
+      BackupRetentionPeriod: 7
+      DBName: !If # Not required if using a database snapshot 
+        - HasSnapshot  # Condition that checks if a snapshot identifier is provided
+        - !Ref "AWS::NoValue"  # Ignore this property if no snapshot is provided
+        - !Ref DBName
+    DeletionPolicy: Snapshot
+
+
+
+Outputs:
+  RDSInstanceEndpoint:
+    Description: The endpoint of the RDS instance
+    Value: !GetAtt MyRDSInstance.Endpoint.Address
+    Export:
+      Name: RDSInstanceEndpoint
+
+  DBInstancePort:
+    Description: "The port for the RDS MySQL instance"
+    Value: !GetAtt MyRDSInstance.Endpoint.Port
+    Export:
+      Name: RDSInstancePort
