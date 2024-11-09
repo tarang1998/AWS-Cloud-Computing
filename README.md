@@ -38,6 +38,8 @@ An AWS Infrastructure project
 - Analyze the cost of resources using AWS Cost Explorer and make recommendations on Reserved Instances or Savings Plans for long-term cost savings.
 - Use containers.
 - Setting up CI/CD pipeline.
+- Using EFS Storage, AWS Lambda, AWS Fargate, Event Bridge, AWS Step function, SQS and SNS
+
 
 
 
